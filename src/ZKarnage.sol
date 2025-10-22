@@ -44,20 +44,20 @@ contract ZKarnage {
     function executeJumpdestAttack(uint256 iterations) external {
         uint256 gasStart = gasleft();
         uint256 result;
-        
+
         assembly {
             for { let i := 0 } lt(i, iterations) { i := add(i, 1) } {
-                // Force jumps through labeled blocks
-                let x := 1
-                switch x 
-                case 1 { result := 1 }
-                case 2 { result := 2 }
-                case 3 { result := 3 }
-                case 4 { result := 4 }
-                case 5 { result := 5 }
+                // Vary x to hit different jump destinations, maximizing JUMPDEST usage
+                let x := mod(i, 5)
+                switch x
+                case 0 { result := add(result, 1) }
+                case 1 { result := add(result, 2) }
+                case 2 { result := add(result, 3) }
+                case 3 { result := add(result, 4) }
+                case 4 { result := add(result, 5) }
             }
         }
-        
+
         emit OpcodeResult("JUMPDEST", gasStart - gasleft());
     }
 
@@ -105,8 +105,9 @@ contract ZKarnage {
         for(uint i = 0; i < base.length; i++) base[i] = 0xFF;
         for(uint i = 0; i < exponent.length; i++) exponent[i] = 0xFF;
         for(uint i = 0; i < modulus.length; i++) modulus[i] = 0xFF;
-        
-        uint256 inputSize = 32 + base.length + exponent.length + modulus.length;
+
+        // Input format: 3 x 32-byte length fields + base data + exponent data + modulus data
+        uint256 inputSize = 96 + base.length + exponent.length + modulus.length;
         bytes memory input = new bytes(inputSize);
         
         assembly {
@@ -137,95 +138,138 @@ contract ZKarnage {
 
     // BN_PAIRING attack - Most expensive precompile (37.91 cycles/gas)
     function executeBnPairingAttack(uint256 iterations) external {
-        // Input for a single pairing check (2 points = 192 bytes)
-        bytes memory input = new bytes(192);
-        
-        // Fill with valid pairing points that require max computation
-        // Using 0xFF might not be valid points, but stresses the precompile
-        for(uint i = 0; i < input.length; i++) {
-            input[i] = 0xFF;
+        // Input for pairing check: 2 pairs = 384 bytes (192 bytes per pair)
+        // We need e(G1, G2) * e(G1, -G2) = 1 for the precompile to return TRUE
+        bytes memory input = new bytes(384);
+
+        // BN254 G1 generator point (x, y) - this is on the base field
+        bytes32 g1_x = bytes32(uint256(1));
+        bytes32 g1_y = bytes32(uint256(2));
+
+        // BN254 G2 generator point (x, y) where x and y are in Fp2
+        // These values are from py_ecc library (Ethereum's reference implementation)
+        // x = x_i * i + x_1, y = y_i * i + y_1 where i^2 = -1
+        bytes32 g2_x_i = bytes32(uint256(0x1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed));
+        bytes32 g2_x_1 = bytes32(uint256(0x198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2));
+        bytes32 g2_y_i = bytes32(uint256(0x12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa));
+        bytes32 g2_y_1 = bytes32(uint256(0x090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b));
+
+        // For -G2, we negate the y coordinate in the field Fp
+        // -y mod p where p = 21888242871839275222246405745257275088696311157297823662689037894645226208583
+        bytes32 neg_g2_y_i = bytes32(uint256(0x1d9befcd05a5323e6da4d435f3b617cdb3af83285c2df711ef39c01571827f9d));
+        bytes32 neg_g2_y_1 = bytes32(uint256(0x275dc4a288d1afb3cbb1ac09187524c7db36395df7be3b99e673b13a075a65ec));
+
+        assembly {
+            // First pairing: (G1, G2)
+            mstore(add(input, 32), g1_x)
+            mstore(add(input, 64), g1_y)
+            mstore(add(input, 96), g2_x_i)
+            mstore(add(input, 128), g2_x_1)
+            mstore(add(input, 160), g2_y_i)
+            mstore(add(input, 192), g2_y_1)
+
+            // Second pairing: (G1, -G2)
+            mstore(add(input, 224), g1_x)
+            mstore(add(input, 256), g1_y)
+            mstore(add(input, 288), g2_x_i)
+            mstore(add(input, 320), g2_x_1)
+            mstore(add(input, 352), neg_g2_y_i)
+            mstore(add(input, 384), neg_g2_y_1)
         }
-        
+
         uint256 gasStart = gasleft();
         bool success;
-        
+
         for(uint i = 0; i < iterations; i++) {
-            // Use a large gas stipend
+            // Call the pairing precompile with 2 pairs
+            // Gas cost: 80000 * 2 + 100000 = 260000
             assembly {
-                success := call(500000, BN_PAIRING_PRECOMPILE, 0, add(input, 32), 192, 0, 32)
+                success := call(300000, BN_PAIRING_PRECOMPILE, 0, add(input, 32), 384, 0, 32)
             }
-            // require(success, "BN_PAIRING call failed"); // Allow test to proceed even if call fails
+            require(success, "BN_PAIRING call failed");
         }
-        
+
         uint256 gasUsed = gasStart - gasleft();
         emit PrecompileResult("BN_PAIRING", gasUsed);
     }
 
     // BN_MUL attack - (17.48 cycles/gas)
     function executeBnMulAttack(uint256 iterations) external {
-        // Input for point multiplication (128 bytes)
-        bytes memory input = new bytes(128);
-        
-        // Fill with values to stress the precompile
-        for(uint i = 0; i < input.length; i++) {
-            input[i] = 0xFF;
+        // Input for point multiplication (96 bytes: point x, y, scalar)
+        bytes memory input = new bytes(96);
+
+        // Use valid BN254 G1 generator point (x, y)
+        bytes32 g1_x = bytes32(uint256(1));
+        bytes32 g1_y = bytes32(uint256(2));
+
+        // Use a large scalar (close to curve order) to maximize multiplication work
+        // This forces many point doubling operations in the scalar multiplication
+        bytes32 scalar = bytes32(uint256(0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000000));
+
+        assembly {
+            mstore(add(input, 32), g1_x)
+            mstore(add(input, 64), g1_y)
+            mstore(add(input, 96), scalar)
         }
-        
+
         uint256 gasStart = gasleft();
         bool success;
-        
+
         for(uint i = 0; i < iterations; i++) {
-             // Use a large gas stipend
+            // Use a large gas stipend
             assembly {
                 // BN_MUL output is 64 bytes
-                success := call(500000, BN_MUL_PRECOMPILE, 0, add(input, 32), 128, 0, 64)
+                success := call(500000, BN_MUL_PRECOMPILE, 0, add(input, 32), 96, 0, 64)
             }
-            // require(success, "BN_MUL call failed"); // Allow test to proceed even if call fails
+            require(success, "BN_MUL call failed");
         }
-        
+
         uint256 gasUsed = gasStart - gasleft();
         emit PrecompileResult("BN_MUL", gasUsed);
     }
 
     // ECRECOVER attack - (15.74 cycles/gas)
     function executeEcrecoverAttack(uint256 iterations) external {
-        // Prepare inputs for ecrecover (128 bytes total)
-        bytes32 hash = keccak256(abi.encodePacked(uint256(0))); // Example hash
-        uint8 v = 27; // Valid v value (must be 27 or 28)
-        bytes32 r = bytes32(uint256(1)); // Example r
-        bytes32 s = bytes32(uint256(2)); // Example s
-        
+        // Note: These are test values designed to maximize ECRECOVER computation
+        // They are not a real signature but have proper formatting and range to force
+        // full elliptic curve operations instead of early validation failure
+        bytes32 hash = 0x8c5be1e5ebec7d5bd14f71427d1e84f3dd0314c0f7b2291e5b200ac8c7c3b925;
+
+        // Signature components in valid range (not actual signatures, but realistic values)
+        // r and s are within secp256k1 curve order, v is valid (27 or 28)
+        // This ensures ECRECOVER performs full point recovery computation for ZK stress testing
+        uint8 v = 28;
+        bytes32 r = 0x9242685bf161793cc25603c231bc2f568eb630ea16aa137d2664ac8038825608;
+        bytes32 s = 0x4f8ae3bd7535248d0bd448298cc2e2071e56992d0774dc340c368ae950852ada;
+
         // Pre-allocate memory for input to avoid allocation inside loop
         bytes memory input = new bytes(128);
-        assembly {
-             mstore(add(input, 0x20), hash)
-             mstore(add(input, 0x40), v)
-             mstore(add(input, 0x60), r)
-             mstore(add(input, 0x80), s)
-        }
-        
+
         uint256 gasStart = gasleft();
         bool success;
         address recoveredAddr; // To store result, preventing removal by optimizer
-        
+
         for(uint i = 0; i < iterations; i++) {
-             // Update hash slightly per iteration to ensure work is done
+             // Vary the hash each iteration to ensure different work is done
+             bytes32 currentHash = keccak256(abi.encodePacked(hash, i));
+
              assembly {
-                mstore(add(input, 0x20), keccak256(add(input, 0x20), 32))
+                 // ECRECOVER input format: hash, v, r, s (all 32 bytes each)
+                 mstore(add(input, 0x20), currentHash)
+                 mstore(add(input, 0x40), v)
+                 mstore(add(input, 0x60), r)
+                 mstore(add(input, 0x80), s)
+
+                 // Call ECRECOVER precompile
+                 // Note: With varying hash, signature won't be valid, but forces full computation
+                 success := call(50000, ECRECOVER_PRECOMPILE, 0, add(input, 32), 128, 0, 32)
+                 recoveredAddr := mload(0) // Load result into memory
              }
-             
-             // Use a large gas stipend
-             assembly {
-                 // ECRECOVER input starts at offset 32 (skip length), length 128
-                 // Output is address (32 bytes, right-padded with zeros)
-                success := call(50000, ECRECOVER_PRECOMPILE, 0, add(input, 32), 128, 0, 32)
-                recoveredAddr := mload(0) // Load result into memory
-             }
-             require(success, "ECRECOVER call failed");
+             // Don't require success - invalid signatures still do computation work
         }
-        // Ensure recoveredAddr is used somehow (though event is primary output)
-        if (recoveredAddr == address(0)) { } 
-        
+        // Use recoveredAddr to prevent optimization
+        if (recoveredAddr == address(0)) { }
+
         uint256 gasUsed = gasStart - gasleft();
         emit PrecompileResult("ECRECOVER", gasUsed);
     }

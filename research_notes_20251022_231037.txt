@@ -1,0 +1,69 @@
+# zkarnage Research Data - 20251022_231037
+# One attack per batch for isolated measurements
+
+Contract Address: 0x06853c001EeAC3d55351baD197092E2045B0Cf31
+
+═══════════════════════════════════════════════════════
+Attack 5: executeBnMulAttack
+═══════════════════════════════════════════════════════
+Expected cycles/gas: 17.48
+Parameters: 10
+Transaction: 0xdf40c4059cede4701f5a9d9b06b271377eeee3ad75e47d26e1f450dc0d6282ca
+L2 Block: 24058
+Gas Used: 86390
+
+Batch ID: 5
+L1 Block: 5
+ZK Cycles: 
+Actual cycles/gas: N/A
+Prove Time:  minutes
+Notes: 
+
+═══════════════════════════════════════════════════════
+Attack 6: executeEcrecoverAttack
+═══════════════════════════════════════════════════════
+Expected cycles/gas: 15.74
+Parameters: 10
+Transaction: 0x7910ec8b3f14ebab6967ca17ac3e4695e73d7a5bb1b3a466bb68288c3e0a8c01
+L2 Block: 24066
+Gas Used: 61646
+
+Batch ID: 6
+L1 Block: 6
+ZK Cycles: 
+Actual cycles/gas: N/A
+Prove Time:  minutes
+Notes: 
+
+═══════════════════════════════════════════════════════
+Attack 7: executeModExpAttack
+═══════════════════════════════════════════════════════
+Expected cycles/gas: Variable
+Parameters: 10
+Transaction: 0x7bb0759a657c0746625048eb2b45ee4ffb963e80a258e28667183a59419cf8b6
+L2 Block: 24072
+Gas Used: 73066
+
+Batch ID: 7
+L1 Block: 7
+ZK Cycles: 
+Actual cycles/gas: N/A
+Prove Time:  minutes
+Notes: 
+
+═══════════════════════════════════════════════════════
+Attack 8: executeAttack
+═══════════════════════════════════════════════════════
+Expected cycles/gas: Baseline
+Parameters: [0x06853c001EeAC3d55351baD197092E2045B0Cf31]
+Transaction: 0x553d7c7aca1b609224045f789bc092080331d017513cdfabde7810a9b223e472
+L2 Block: 24080
+Gas Used: 26089
+
+Batch ID: 8
+L1 Block: 8
+ZK Cycles: 
+Actual cycles/gas: N/A
+Prove Time:  minutes
+Notes: 
+

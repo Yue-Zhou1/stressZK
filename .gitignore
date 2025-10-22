@@ -23,3 +23,11 @@ broadcast/
 **__pycache__
 **logs/**
 *.log
+
+# Python virtual environment
+venv/
+env/
+ENV/
+.venv/
+
+.claude

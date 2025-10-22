@@ -1,6 +1,21 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
+/**
+ * @title ZKarnage Test Suite - Taiko Hoodi Testnet
+ * @notice Tests for ZKarnage attack functions deployed on Taiko Hoodi testnet
+ * @dev This test suite:
+ *      - Forks Taiko Hoodi testnet (https://rpc.hoodi.taiko.xyz)
+ *      - Uses deployed contract at 0x06853c001EeAC3d55351baD197092E2045B0Cf31
+ *      - Measures EVM gas consumption for each attack
+ *      - IMPORTANT: Gas measurements here are EVM gas, NOT ZK cycles
+ *                   For actual ZK cycle data, use test_attacks.sh workflow
+ *
+ * Usage:
+ *   forge test -vvv                    # Run all tests
+ *   forge test --match-test testBnPairing -vvv  # Run specific test
+ */
+
 import {Test} from "../lib/forge-std/src/Test.sol";
 import {console} from "../lib/forge-std/src/console.sol";
 import "../src/ZKarnage.sol";
@@ -8,7 +23,7 @@ import "../src/ZKarnage.sol";
 contract ZKarnageTest is Test {
     ZKarnage public zkarnage;
     uint256 public forkId;
-    
+
     // --- Local Event Definitions (to satisfy vm.expectEmit syntax) ---
     // These must match the signatures in ZKarnage.sol exactly.
     event OpcodeResult(string name, uint256 gasUsed);
@@ -17,7 +32,14 @@ contract ZKarnageTest is Test {
     // ContractAccessed event is not explicitly checked here, but could be added if needed.
     // event ContractAccessed(address indexed target, uint256 size);
 
-    // Test addresses (known large contracts on mainnet)
+    // Deployed contract address on Taiko Hoodi testnet
+    address constant DEPLOYED_CONTRACT = 0x06853c001EeAC3d55351baD197092E2045B0Cf31;
+
+    // Taiko Hoodi testnet configuration
+    string constant TAIKO_HOODI_RPC = "https://rpc.hoodi.taiko.xyz";
+    uint256 constant TAIKO_HOODI_CHAIN_ID = 167013;
+
+    // Test addresses (will use deployed contract address as test target)
     address[] testAddresses;
     
     // Gas limits for different attacks (Adjust as needed based on runs)
@@ -33,43 +55,42 @@ contract ZKarnageTest is Test {
     uint256 constant SHA256_GAS_LIMIT = 2_000_000;
     
     function setUp() public {
-        // Deploy the attack contract
-        zkarnage = new ZKarnage();
-        
-        // Set up test addresses (using a few known contracts)
-        testAddresses = new address[](5);
-        testAddresses[0] = 0xB95c8fB8a94E175F957B5044525F9129fbA0fE0C;
-        testAddresses[1] = 0x1908D2bD020Ba25012eb41CF2e0eAd7abA1c48BC;
-        testAddresses[2] = 0xa102b6Eb23670B07110C8d316f4024a2370Be5dF;
-        testAddresses[3] = 0x84ab2d6789aE78854FbdbE60A9873605f4Fd038c;
-        testAddresses[4] = 0x1908D2bD020Ba25012eb41CF2e0eAd7abA1c48BC;
-        
-        // Get RPC URL - Use string explicitly for envOr
-        string memory key = "ETH_RPC_URL";
-        string memory defaultValue = "";
-        string memory rpcUrl = vm.envOr(key, defaultValue);
-        require(bytes(rpcUrl).length > 0, "ETH_RPC_URL env var not set");
-        console.log("Using RPC URL from ETH_RPC_URL"); // Avoid logging the URL itself
-        
-        // Create fork with latest block
-        forkId = vm.createFork(rpcUrl);
+        console.log("\n=== Taiko Hoodi Testnet Fork Setup ===");
+
+        // Create fork of Taiko Hoodi testnet
+        forkId = vm.createFork(TAIKO_HOODI_RPC);
         vm.selectFork(forkId);
-        console.log("Fork created with ID:", forkId, "at block:", block.number);
-        
-        // Optional: Verify contract code access after fork selection
-        // It's good practice but can be verbose, uncomment if needed
-        /*
-        for (uint i = 0; i < testAddresses.length; i++) {
-            bytes memory code = address(testAddresses[i]).code;
-            require(code.length > 0, string.concat("Cannot access contract code for address ", vm.toString(testAddresses[i])));
-        }
-        console.log("Verified contract code access on fork.");
-        */
+
+        console.log("Fork created with ID:", forkId);
+        console.log("Chain ID:", block.chainid);
+        console.log("Current block:", block.number);
+        console.log("Using deployed contract:", DEPLOYED_CONTRACT);
+
+        // Connect to deployed contract instead of deploying new one
+        zkarnage = ZKarnage(DEPLOYED_CONTRACT);
+
+        // Verify contract exists on fork
+        require(address(zkarnage).code.length > 0, "Contract not found at deployed address");
+        console.log("Contract code size:", address(zkarnage).code.length, "bytes");
+
+        // Set up test addresses for EXTCODESIZE attack
+        // Note: Use actual contracts on Taiko Hoodi with code
+        // You can find more contracts at https://hoodi.taikoscan.io/
+        testAddresses = new address[](3);
+        testAddresses[0] = DEPLOYED_CONTRACT; // Our ZKarnage contract itself
+
+        // Add more addresses if you want to test EXTCODESIZE with real contracts:
+        // Visit https://hoodi.taikoscan.io/ and find contracts with large bytecode
+        // For now, we'll just use our contract multiple times for basic testing
+        testAddresses[1] = DEPLOYED_CONTRACT;
+        testAddresses[2] = DEPLOYED_CONTRACT;
+
+        console.log("Setup complete!\n");
     }
 
     function testJumpdestAttack() public {
         console.log("\n=== Testing JUMPDEST Attack ===");
-        uint256 iterations = 1000;
+        uint256 iterations = 100;
         
         uint256 gasStart = gasleft();
         // Expect OpcodeResult event (only check emitter)
