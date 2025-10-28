@@ -28,9 +28,9 @@ if [ ! -f "foundry.toml" ]; then
     exit 1
 fi
 
-# Load .env
-if [ -f ".env" ]; then
-    source .env
+# Load .env.taiko_hoodi
+if [ -f ".env.taiko_hoodi" ]; then
+    source .env.taiko_hoodi
 fi
 
 # Network configuration
@@ -45,18 +45,13 @@ fi
 
 # Create results file with timestamp
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-RESULTS_FILE="research_results_${TIMESTAMP}.csv"
 NOTES_FILE="research_notes_${TIMESTAMP}.txt"
 
 echo "# zkarnage Research Data - ${TIMESTAMP}" > $NOTES_FILE
 echo "# One attack per batch for isolated measurements" >> $NOTES_FILE
 echo "" >> $NOTES_FILE
 
-# Create CSV with headers
-echo "attack_num,attack_name,expected_cycles_per_gas,tx_hash,l2_block,gas_used,batch_id,l1_block,zk_cycles,actual_cycles_per_gas,prove_time_mins,notes" > $RESULTS_FILE
-
 echo -e "${GREEN}✅ Results will be saved to:${NC}"
-echo "   Data: $RESULTS_FILE"
 echo "   Notes: $NOTES_FILE"
 echo ""
 
@@ -70,20 +65,34 @@ if [ -n "$STRESS_CONTRACT_ADDRESS" ]; then
     CONTRACT_ADDRESS=$STRESS_CONTRACT_ADDRESS
 else
     echo -e "${YELLOW}📤 Deploying ZKarnage contract...${NC}"
+
+    # Temporarily disable exit on error to capture deployment output
+    set +e
     DEPLOY_OUTPUT=$(forge script script/DeployZKarnage.s.sol \
         --rpc-url $TAIKO_HOODI_RPC \
         --broadcast \
         --legacy \
         2>&1)
+    DEPLOY_EXIT_CODE=$?
+    set -e
+
+    # Always show deployment output for debugging
+    echo -e "${CYAN}Deployment output:${NC}"
+    echo "$DEPLOY_OUTPUT"
+    echo ""
+
+    # Check if deployment failed
+    if [ $DEPLOY_EXIT_CODE -ne 0 ]; then
+        echo -e "${RED}❌ Deployment command failed with exit code: $DEPLOY_EXIT_CODE${NC}"
+        exit 1
+    fi
 
     # Extract contract address from deployment output
     # forge script outputs the address in a log line like: "ZKarnage contract deployed at: 0x..."
     CONTRACT_ADDRESS=$(echo "$DEPLOY_OUTPUT" | grep "ZKarnage contract deployed at:" | awk '{print $NF}')
 
     if [ -z "$CONTRACT_ADDRESS" ]; then
-        echo -e "${RED}❌ Failed to deploy contract${NC}"
-        echo -e "${RED}Deployment output:${NC}"
-        echo "$DEPLOY_OUTPUT"
+        echo -e "${RED}❌ Failed to extract contract address from deployment output${NC}"
         exit 1
     fi
 
@@ -198,21 +207,33 @@ execute_attack() {
     # Execute the attack
     echo ""
     echo -e "${YELLOW}📤 Executing ${attack_name}(${param_values})...${NC}"
+
+    # Temporarily disable exit on error to capture cast send failures
+    set +e
     TX_OUTPUT=$(cast send $CONTRACT_ADDRESS "${function_sig}" $param_values \
         --rpc-url $TAIKO_HOODI_RPC \
         --private-key $PRIVATE_KEY \
         --legacy \
         2>&1)
+    CAST_EXIT_CODE=$?
+    set -e
+
+    # Check if cast send failed
+    if [ $CAST_EXIT_CODE -ne 0 ]; then
+        echo -e "${RED}❌ cast send command failed with exit code: $CAST_EXIT_CODE${NC}"
+        echo -e "${RED}Output:${NC}"
+        echo "$TX_OUTPUT"
+        return
+    fi
 
     # Extract transaction hash from cast send output
     # It can be either a standalone line "0x..." or a line "transactionHash    0x..."
     TX_HASH=$(echo "$TX_OUTPUT" | grep -oE "0x[a-fA-F0-9]{64}" | tail -n 1)
 
     if [ -z "$TX_HASH" ]; then
-        echo -e "${RED}❌ Failed to execute attack${NC}"
+        echo -e "${RED}❌ Failed to extract transaction hash${NC}"
         echo -e "${RED}Output:${NC}"
         echo "$TX_OUTPUT"
-        echo "$num,$attack_name,$expected_ratio,FAILED,,,,,,,Failed to execute" >> $RESULTS_FILE
         return
     fi
 
@@ -303,10 +324,6 @@ execute_attack() {
         ACTUAL_RATIO="N/A"
     fi
 
-    # Save to CSV
-    echo "$num,$attack_name,$expected_ratio,$TX_HASH,$L2_BLOCK,$GAS_USED,$BATCH_ID,$L1_BLOCK,$ZK_CYCLES,$ACTUAL_RATIO,$PROVE_TIME,\"$USER_NOTES\"" >> $RESULTS_FILE
-
-    # Save to notes
     echo "Batch ID: $BATCH_ID" >> $NOTES_FILE
     echo "L1 Block: $L1_BLOCK" >> $NOTES_FILE
     echo "ZK Cycles: $ZK_CYCLES" >> $NOTES_FILE
@@ -373,11 +390,7 @@ echo -e "${GREEN}✅ All Attacks Completed!${NC}"
 echo -e "${GREEN}═══════════════════════════════════════════════════════${NC}"
 echo ""
 echo -e "${BLUE}Results saved to:${NC}"
-echo "   📊 CSV Data: $RESULTS_FILE"
 echo "   📝 Notes:    $NOTES_FILE"
-echo ""
-echo -e "${BLUE}You can now analyze your data:${NC}"
-echo "   cat $RESULTS_FILE | column -t -s,"
 echo ""
 echo -e "${CYAN}Thank you for your patience! Good luck with your research! 🚀${NC}"
 echo ""

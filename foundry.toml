@@ -2,7 +2,7 @@
 src = "src"
 out = "out"
 libs = ["lib"]
-evm_version = "paris"  # or "shanghai" or "cancun" depending on your needs
+evm_version = "cancun"  # Required for mcopy instruction
 # Enable fork testing
 ffi = true
 # Increase the default timeout for tests

@@ -1,0 +1,14 @@
+# zkarnage Research Data - 20251028_141604
+# One attack per batch for isolated measurements
+
+Contract Address: 0xf389D2e8eA730fdbC82f644c667132A6BF391A91
+
+═══════════════════════════════════════════════════════
+Attack 2: executeMcopyAttack
+═══════════════════════════════════════════════════════
+Expected cycles/gas: 666.39
+Parameters: 4096 2500
+Transaction: 0xdacf2aaf7f5ad8cbe5e09e1043f0cca4b07fcf035804d7281095b4e8511da520
+L2 Block: 244427
+Gas Used: 28374089
+

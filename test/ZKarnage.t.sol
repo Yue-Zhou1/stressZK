@@ -33,7 +33,7 @@ contract ZKarnageTest is Test {
     // event ContractAccessed(address indexed target, uint256 size);
 
     // Deployed contract address on Taiko Hoodi testnet
-    address constant DEPLOYED_CONTRACT = 0x06853c001EeAC3d55351baD197092E2045B0Cf31;
+    address constant DEPLOYED_CONTRACT = 0x586498e8cE0f8fF21DF9B8d15E1d0E9362AAF2eD;
 
     // Taiko Hoodi testnet configuration
     string constant TAIKO_HOODI_RPC = "https://rpc.hoodi.taiko.xyz";
@@ -43,10 +43,10 @@ contract ZKarnageTest is Test {
     address[] testAddresses;
     
     // Gas limits for different attacks (Adjust as needed based on runs)
-    uint256 constant JUMPDEST_GAS_LIMIT = 200_000;
-    uint256 constant MCOPY_GAS_LIMIT = 300_000;
+    uint256 constant JUMPDEST_GAS_LIMIT = 1_000_000;
+    uint256 constant MCOPY_GAS_LIMIT = 1_000_000;
     uint256 constant CALLDATACOPY_GAS_LIMIT = 1_000_000;
-    uint256 constant MODEXP_GAS_LIMIT = 500_000;
+    uint256 constant MODEXP_GAS_LIMIT = 1_000_000;
     uint256 constant BN_PAIRING_GAS_LIMIT = 5_000_000;
     uint256 constant BN_MUL_GAS_LIMIT = 5_500_000;
     uint256 constant ECRECOVER_GAS_LIMIT = 500_000;
@@ -90,16 +90,16 @@ contract ZKarnageTest is Test {
 
     function testJumpdestAttack() public {
         console.log("\n=== Testing JUMPDEST Attack ===");
-        uint256 iterations = 100;
-        
+        uint256 iterations = 6200;
+
         uint256 gasStart = gasleft();
-        // Expect OpcodeResult event (only check emitter)
-        vm.expectEmit(false, false, false, false, address(zkarnage));
-        // Provide the expected event signature template
-        emit OpcodeResult("JUMPDEST", 0);
-        zkarnage.executeJumpdestAttack(iterations);
+        // Use low-level call to avoid staticcall optimization
+        (bool success, ) = address(zkarnage).call(
+            abi.encodeWithSelector(zkarnage.executeJumpdestAttack.selector, iterations)
+        );
+        require(success, "executeJumpdestAttack failed");
         uint256 gasUsed = gasStart - gasleft();
-        
+
         console.log("Total Gas used for JUMPDEST attack tx:", gasUsed);
         if (iterations > 0) {
              console.log("Approx Gas per iteration (external):", gasUsed / iterations);
@@ -109,17 +109,17 @@ contract ZKarnageTest is Test {
 
     function testMcopyAttack() public {
         console.log("\n=== Testing Memory Operations (MCOPY) Attack ===");
-        uint256 size = 256;
-        uint256 iterations = 1000;
-        
+        uint256 size = 4096;
+        uint256 iterations = 2500;
+
         uint256 gasStart = gasleft();
-        // Expect OpcodeResult event (only check emitter)
-        vm.expectEmit(false, false, false, false, address(zkarnage));
-        // Provide the expected event signature template
-        emit OpcodeResult("MCOPY", 0);
-        zkarnage.executeMcopyAttack(size, iterations);
+        // Use low-level call to avoid optimization and ensure proper gas measurement
+        (bool success, ) = address(zkarnage).call(
+            abi.encodeWithSelector(zkarnage.executeMcopyAttack.selector, size, iterations)
+        );
+        require(success, "executeMcopyAttack failed");
         uint256 gasUsed = gasStart - gasleft();
-        
+
         console.log("Total Gas used for memory operations attack tx:", gasUsed);
         if (iterations > 0) {
             console.log("Approx Gas per iteration (external):", gasUsed / iterations);
@@ -150,16 +150,16 @@ contract ZKarnageTest is Test {
 
     function testModExpAttack() public {
         console.log("\n=== Testing MODEXP Attack ===");
-        uint256 iterations = 10;
-        
+        uint256 iterations = 330;
+
         uint256 gasStart = gasleft();
-        // Expect PrecompileResult event (only check emitter)
-        vm.expectEmit(false, false, false, false, address(zkarnage));
-        // Provide the expected event signature template
-        emit PrecompileResult("MODEXP", 0);
-        zkarnage.executeModExpAttack(iterations);
+        // Use low-level call to avoid staticcall optimization
+        (bool success, ) = address(zkarnage).call(
+            abi.encodeWithSelector(zkarnage.executeModExpAttack.selector, iterations)
+        );
+        require(success, "executeModExpAttack failed");
         uint256 gasUsed = gasStart - gasleft();
-        
+
         console.log("Total Gas used for MODEXP attack tx:", gasUsed);
         if (iterations > 0) {
             console.log("Approx Gas per iteration (external):", gasUsed / iterations);
@@ -170,15 +170,14 @@ contract ZKarnageTest is Test {
     function testBnPairingAttack() public {
         console.log("\n=== Testing BN_PAIRING Attack ===");
         uint256 iterations = 5;
-        
+
         uint256 gasStart = gasleft();
-         // Expect PrecompileResult event (only check emitter)
-        vm.expectEmit(false, false, false, false, address(zkarnage));
-        // Provide the expected event signature template
-        emit PrecompileResult("BN_PAIRING", 0);
-        zkarnage.executeBnPairingAttack(iterations);
+        (bool success, ) = address(zkarnage).call(
+            abi.encodeWithSelector(zkarnage.executeBnPairingAttack.selector, iterations)
+        );
+        require(success, "executeBnPairingAttack failed");
         uint256 gasUsed = gasStart - gasleft();
-        
+
         console.log("Total Gas used for BN_PAIRING attack tx:", gasUsed);
         if (iterations > 0) {
             console.log("Approx Gas per iteration (external):", gasUsed / iterations);

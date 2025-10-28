@@ -41,34 +41,58 @@ contract ZKarnage {
     }
 
     // JUMPDEST attack - Most expensive opcode (1037.68 cycles/gas)
-    function executeJumpdestAttack(uint256 iterations) external {
-        uint256 gasStart = gasleft();
-        uint256 result;
-
+    function executeJumpdestAttack(uint256 iterations) external pure {
         assembly {
-            for { let i := 0 } lt(i, iterations) { i := add(i, 1) } {
-                // Vary x to hit different jump destinations, maximizing JUMPDEST usage
-                let x := mod(i, 5)
-                switch x
-                case 0 { result := add(result, 1) }
-                case 1 { result := add(result, 2) }
-                case 2 { result := add(result, 3) }
-                case 3 { result := add(result, 4) }
-                case 4 { result := add(result, 5) }
-            }
-        }
-
-        emit OpcodeResult("JUMPDEST", gasStart - gasleft());
+                    // This is the most gas-efficient loop structure. The for loop's
+                    // condition check and decrement will compile to opcodes that
+                    // end in a JUMPI back to the start of the loop. The body is
+                    // empty, adding no extra gas cost per iteration.
+                    for { let i := iterations } i { i := sub(i, 1) } {
+                        // The loop body is intentionally empty.
+                        // We are stressing the JUMPI and JUMPDEST validation,
+                        // not any operations within the loop.
+                    }
+                }
     }
 
     // MCOPY attack - Second most expensive opcode (666.39 cycles/gas)
-    function executeMcopyAttack(uint256 size, uint256 iterations) external {
-        uint256 gasStart = gasleft();
-        bytes memory data = new bytes(size);
+    // function executeMcopyAttack(uint256 size, uint256 iterations) external {
+    //     uint256 gasStart = gasleft();
+    //     bytes memory data = new bytes(size);
         
+    //     assembly {
+    //         for { let i := 0 } lt(i, iterations) { i := add(i, 1) } {
+    //             // Perform memory operations using mstore/mload
+    //             let value := mload(add(data, 64))
+    //             mstore(add(data, 32), value)
+    //             value := mload(add(data, 96))
+    //             mstore(add(data, 64), value)
+    //             value := mload(add(data, 128))
+    //             mstore(add(data, 96), value)
+    //         }
+    //     }
+        
+    //     emit OpcodeResult("MCOPY", gasStart - gasleft());
+    // }
+
+    /**
+     * @notice Executes memory copy operations in a loop to stress the prover's
+     * memory validation logic. Uses MLOAD/MSTORE for backwards compatibility
+     * with networks that don't support MCOPY (pre-Cancun). Memory operations
+     * can be computationally intensive to prove in a ZK circuit.
+     * @param size The size of the memory chunk to copy in each iteration (in bytes).
+     * @param iterations The number of copy operations to perform.
+     */
+    function executeMcopyAttack(uint256 size, uint256 iterations) external pure {
+        // Allocate memory buffer - expansion cost paid once
+        bytes memory data = new bytes(size);
+
         assembly {
-            for { let i := 0 } lt(i, iterations) { i := add(i, 1) } {
-                // Perform memory operations using mstore/mload
+            // Countdown loop for minimal gas overhead (matching executeJumpdestAttack pattern)
+            for { let i := iterations } i { i := sub(i, 1) } {
+                // Perform fixed memory operations using MLOAD/MSTORE
+                // Each iteration does a small fixed number of operations to minimize gas
+                // while still stressing the memory subsystem for ZK proving
                 let value := mload(add(data, 64))
                 mstore(add(data, 32), value)
                 value := mload(add(data, 96))
@@ -77,8 +101,6 @@ contract ZKarnage {
                 mstore(add(data, 96), value)
             }
         }
-        
-        emit OpcodeResult("MCOPY", gasStart - gasleft());
     }
 
     // CALLDATACOPY attack - Third most expensive opcode (580.81 cycles/gas)
@@ -95,102 +117,123 @@ contract ZKarnage {
         emit OpcodeResult("CALLDATACOPY", gasStart - gasleft());
     }
 
-    // MODEXP attack targeting worst case from EIP-7883
-    function executeModExpAttack(uint256 iterations) external {
-        bytes memory base = new bytes(32);    // 32 bytes
-        bytes memory exponent = new bytes(64); // 64 bytes to trigger higher cost
-        bytes memory modulus = new bytes(32);  // 32 bytes
-        
-        // Fill with non-zero values to maximize complexity
-        for(uint i = 0; i < base.length; i++) base[i] = 0xFF;
-        for(uint i = 0; i < exponent.length; i++) exponent[i] = 0xFF;
-        for(uint i = 0; i < modulus.length; i++) modulus[i] = 0xFF;
+    /**
+     * @notice Executes MODEXP precompile optimized for minimal gas and maximum ZK cycles.
+     *
+     * Parameters optimized for maximum ZK stress with minimal gas:
+     * - Base: 32 bytes (coprime to modulus to force real modular arithmetic)
+     * - Exponent: 64 bytes of 0xFF (maximizes Montgomery ladder iterations)
+     * - Modulus: 32 bytes (coprime to base, avoids trivial reductions)
+     *
+     * @param iterations The number of MODEXP operations to perform.
+     */
+    function executeModExpAttack(uint256 iterations) external view {
+        // Using an unchecked block saves ~100 gas per iteration by removing overflow checks
+        unchecked {
+            for (uint256 i = 0; i < iterations; i++) {
+                assembly {
+                    // Get free memory pointer (costs 3 gas but ensures memory safety)
+                    let p := mload(0x40)
 
-        // Input format: 3 x 32-byte length fields + base data + exponent data + modulus data
-        uint256 inputSize = 96 + base.length + exponent.length + modulus.length;
-        bytes memory input = new bytes(inputSize);
-        
-        assembly {
-            mstore(add(input, 32), 32)  // base length
-            mstore(add(input, 64), 64)  // exponent length
-            mstore(add(input, 96), 32)  // modulus length
-            mstore(add(input, 128), mload(add(base, 32)))
-            mstore(add(input, 160), mload(add(exponent, 32)))
-            mstore(add(input, 192), mload(add(exponent, 64)))
-            mstore(add(input, 224), mload(add(modulus, 32)))
-        }
-        
-        uint256 gasStart = gasleft();
-        bool success;
-        
-        for(uint i = 0; i < iterations; i++) {
-            // Use a large gas stipend, but it shouldn't consume nearly this much per call
-            assembly {
-                success := call(500000, MODEXP_PRECOMPILE, 0, add(input, 32), inputSize, 0, 32)
+                    // Prepare input for MODEXP precompile
+                    // Format: [base_length][exp_length][mod_length][base_data][exponent_data][modulus_data]
+                    mstore(p, 0x20)                      // Base length: 32 bytes
+                    mstore(add(p, 0x20), 0x40)           // Exponent length: 64 bytes
+                    mstore(add(p, 0x40), 0x20)           // Modulus length: 32 bytes
+
+                    // Base: Large coprime number (~2^255 + random)
+                    // Using coprime values forces the ZK prover to do real modular arithmetic
+                    // rather than taking shortcuts for trivial cases like base == modulus
+                    mstore(add(p, 0x60), 0x8000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed)
+
+                    // Exponent: All 0xFF (64 bytes = 2 x 32 bytes)
+                    // Maximum value forces the Montgomery ladder to perform maximum iterations
+                    mstore(add(p, 0x80), 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF)
+                    mstore(add(p, 0xA0), 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF)
+
+                    // Modulus: Different coprime number (ensures gcd(base, modulus) = 1)
+                    // This is 2^256 - 59, a pseudo-prime that ensures full computation
+                    mstore(add(p, 0xC0), 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC5)
+
+                    // Call MODEXP precompile using staticcall (correct for non-state-modifying precompiles)
+                    // Input: 3*32 (lengths) + 32 (base) + 64 (exponent) + 32 (modulus) = 224 bytes (0xE0)
+                    // We reuse memory location p for output to save gas on memory allocation
+                    // pop() discards the success value to save gas (we don't check for success
+                    // because the goal is purely to force the ZK prover to verify the computation)
+                    pop(staticcall(
+                        gas(),      // Forward all available gas
+                        0x05,       // Address of MODEXP precompile
+                        p,          // Input memory offset
+                        0xE0,       // Input size (224 bytes)
+                        p,          // Output memory offset (reuse input location)
+                        0x20        // Output size (32 bytes)
+                    ))
+                }
             }
-            // Revert if any single call fails
-            require(success, "MODEXP call failed");
         }
-        
-        uint256 gasUsed = gasStart - gasleft();
-        emit PrecompileResult("MODEXP", gasUsed);
     }
 
-    // BN_PAIRING attack - Most expensive precompile (37.91 cycles/gas)
-    function executeBnPairingAttack(uint256 iterations) external {
-        // Input for pairing check: 2 pairs = 384 bytes (192 bytes per pair)
-        // We need e(G1, G2) * e(G1, -G2) = 1 for the precompile to return TRUE
-        bytes memory input = new bytes(384);
-
-        // BN254 G1 generator point (x, y) - this is on the base field
-        bytes32 g1_x = bytes32(uint256(1));
-        bytes32 g1_y = bytes32(uint256(2));
-
-        // BN254 G2 generator point (x, y) where x and y are in Fp2
-        // These values are from py_ecc library (Ethereum's reference implementation)
-        // x = x_i * i + x_1, y = y_i * i + y_1 where i^2 = -1
-        bytes32 g2_x_i = bytes32(uint256(0x1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed));
-        bytes32 g2_x_1 = bytes32(uint256(0x198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2));
-        bytes32 g2_y_i = bytes32(uint256(0x12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa));
-        bytes32 g2_y_1 = bytes32(uint256(0x090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b));
-
-        // For -G2, we negate the y coordinate in the field Fp
-        // -y mod p where p = 21888242871839275222246405745257275088696311157297823662689037894645226208583
-        bytes32 neg_g2_y_i = bytes32(uint256(0x1d9befcd05a5323e6da4d435f3b617cdb3af83285c2df711ef39c01571827f9d));
-        bytes32 neg_g2_y_1 = bytes32(uint256(0x275dc4a288d1afb3cbb1ac09187524c7db36395df7be3b99e673b13a075a65ec));
-
+    /**
+     * @notice Executes BN_PAIRING precompile optimized for minimal gas and maximum ZK cycles.
+     *
+     * Gas Cost: per iteration (loop overhead + precompile base + 2 pairs)
+     *
+     * BN254 pairing is the most expensive precompile for ZK provers because it requires:
+     * - Miller loop computations over extension fields (Fp12)
+     * - Final exponentiation with large powers
+     * - Multiple elliptic curve point operations
+     *
+     * @param iterations The number of pairing operations to perform.
+     */
+    function executeBnPairingAttack(uint256 iterations) external view {
         assembly {
-            // First pairing: (G1, G2)
-            mstore(add(input, 32), g1_x)
-            mstore(add(input, 64), g1_y)
-            mstore(add(input, 96), g2_x_i)
-            mstore(add(input, 128), g2_x_1)
-            mstore(add(input, 160), g2_y_i)
-            mstore(add(input, 192), g2_y_1)
+            // Get free memory pointer for our input buffer
+            let p := mload(0x40)
 
-            // Second pairing: (G1, -G2)
-            mstore(add(input, 224), g1_x)
-            mstore(add(input, 256), g1_y)
-            mstore(add(input, 288), g2_x_i)
-            mstore(add(input, 320), g2_x_1)
-            mstore(add(input, 352), neg_g2_y_i)
-            mstore(add(input, 384), neg_g2_y_1)
-        }
+            // Prepare pairing input: 2 pairs = 384 bytes (192 bytes per pair)
+            // Each pair is (G1_point, G2_point) where:
+            // - G1 point: 64 bytes (x, y in Fp)
+            // - G2 point: 128 bytes (x, y in Fp2, represented as 4 x 32-byte values)
 
-        uint256 gasStart = gasleft();
-        bool success;
+            // === First Pairing: e(G1, G2) ===
 
-        for(uint i = 0; i < iterations; i++) {
-            // Call the pairing precompile with 2 pairs
-            // Gas cost: 80000 * 2 + 100000 = 260000
-            assembly {
-                success := call(300000, BN_PAIRING_PRECOMPILE, 0, add(input, 32), 384, 0, 32)
+            mstore(p, 0x0000000000000000000000000000000000000000000000000000000000000001) // G1.x
+            mstore(add(p, 0x20), 0x0000000000000000000000000000000000000000000000000000000000000002) // G1.y
+
+            mstore(add(p, 0x40), 0x198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2) // G2.x real part
+            mstore(add(p, 0x60), 0x1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed) // G2.x imaginary part
+            mstore(add(p, 0x80), 0x090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b) // G2.y real part
+            mstore(add(p, 0xA0), 0x12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa) // G2.y imaginary part
+
+            // === Second Pairing: e(-G1, G2) ===
+
+            mstore(add(p, 0xC0), 0x0000000000000000000000000000000000000000000000000000000000000001) // -G1.x (same as G1.x)
+            mstore(add(p, 0xE0), 0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd45) // -G1.y (negated)
+
+            // Same G2 generator point as first pair (real parts first!)
+            mstore(add(p, 0x100), 0x198e9393920d483a7260bfb731fb5d25f1aa493335a9e71297e485b7aef312c2) // G2.x real
+            mstore(add(p, 0x120), 0x1800deef121f1e76426a00665e5c4479674322d4f75edadd46debd5cd992f6ed) // G2.x imaginary
+            mstore(add(p, 0x140), 0x090689d0585ff075ec9e99ad690c3395bc4b313370b38ef355acdadcd122975b) // G2.y real
+            mstore(add(p, 0x160), 0x12c85ea5db8c6deb4aab71808dcb408fe3d1e7690c43d37b4ce6cc0166fa7daa) // G2.y imaginary
+
+            // This configuration ensures e(G1, G2) * e(-G1, G2) = 1 (valid pairing)
+            // forcing the precompile to perform full Miller loop + final exponentiation
+
+            // Countdown loop for minimal gas overhead (matching executeJumpdestAttack pattern)
+            for { let i := iterations } i { i := sub(i, 1) } {
+                // Call BN_PAIRING precompile (address 0x08)
+                // Input: 384 bytes (2 pairs)
+                // Output: 32 bytes (1 if valid pairing, 0 otherwise)
+                pop(staticcall(
+                    gas(),         // Forward all available gas
+                    0x08,          // BN_PAIRING precompile address
+                    p,             // Input memory offset
+                    0x180,         // Input size: 384 bytes (0x180 in hex)
+                    add(p, 0x180), // Output memory offset (after input, not overlapping)
+                    0x20           // Output size: 32 bytes
+                ))
             }
-            require(success, "BN_PAIRING call failed");
         }
-
-        uint256 gasUsed = gasStart - gasleft();
-        emit PrecompileResult("BN_PAIRING", gasUsed);
     }
 
     // BN_MUL attack - (17.48 cycles/gas)
