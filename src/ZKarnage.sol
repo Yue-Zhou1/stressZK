@@ -7,10 +7,19 @@ contract ZKarnage {
     event ModExpResult(uint256 gasUsed, uint256 result);
     event PrecompileResult(string name, uint256 gasUsed);
     event OpcodeResult(string name, uint256 gasUsed);
+    event AttackMetrics(
+        uint8 indexed attackId,
+        uint256 gasUsed,
+        uint256 memoryFootprint,
+        uint256 iterations,
+        bytes32 accumulator,
+        bytes32 digest
+    );
     
     // Storage variables to ensure hash results are used and persisted
     bytes32 public accumulatedHash;
     bytes32 public accumulatedSha256Hash;
+    bytes32 public lastAttackDigest;
     
     // Precompile addresses
     address constant ECRECOVER_PRECOMPILE = 0x0000000000000000000000000000000000000001;
@@ -20,6 +29,68 @@ contract ZKarnage {
     address constant BN_ADD_PRECOMPILE = 0x0000000000000000000000000000000000000006;
     address constant BN_MUL_PRECOMPILE = 0x0000000000000000000000000000000000000007;
     address constant BN_PAIRING_PRECOMPILE = 0x0000000000000000000000000000000000000008;
+
+    enum AttackId {
+        Jumpdest,
+        Mcopy,
+        Calldatacopy,
+        Modexp,
+        BnPairing,
+        BnMul,
+        Ecrecover,
+        Keccak,
+        Sha256
+    }
+
+    struct AttackContext {
+        uint256 gasBefore;
+        uint256 memoryBefore;
+        bytes32 carry;
+        AttackId attackId;
+        uint256 iterations;
+    }
+
+    function _beginAttack(AttackId attackId, uint256 iterations, bytes32 seed)
+        internal
+        view
+        returns (AttackContext memory ctx)
+    {
+        uint256 gasBefore = gasleft();
+        uint256 memoryBefore;
+        assembly {
+            memoryBefore := mload(0x40)
+        }
+        ctx = AttackContext({
+            gasBefore: gasBefore,
+            memoryBefore: memoryBefore,
+            carry: seed,
+            attackId: attackId,
+            iterations: iterations
+        });
+    }
+
+    function _finishAttack(AttackContext memory ctx)
+        internal
+        returns (uint256 gasUsed, uint256 memoryFootprint)
+    {
+        uint256 gasAfter = gasleft();
+        gasUsed = ctx.gasBefore - gasAfter;
+        assembly {
+            memoryFootprint := mload(0x40)
+        }
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                lastAttackDigest,
+                ctx.carry,
+                uint256(uint8(ctx.attackId)),
+                gasUsed,
+                memoryFootprint,
+                ctx.iterations
+            )
+        );
+        lastAttackDigest = digest;
+        emit AttackMetrics(uint8(ctx.attackId), gasUsed, memoryFootprint, ctx.iterations, ctx.carry, digest);
+    }
     
     // Original EXTCODESIZE attack
     function executeAttack(address[] calldata targets) external {
@@ -41,18 +112,19 @@ contract ZKarnage {
     }
 
     // JUMPDEST attack - Most expensive opcode (1037.68 cycles/gas)
-    function executeJumpdestAttack(uint256 iterations) external pure {
+    function executeJumpdestAttack(uint256 iterations) external {
+        AttackContext memory ctx = _beginAttack(AttackId.Jumpdest, iterations, bytes32(iterations));
         assembly {
-                    // This is the most gas-efficient loop structure. The for loop's
-                    // condition check and decrement will compile to opcodes that
-                    // end in a JUMPI back to the start of the loop. The body is
-                    // empty, adding no extra gas cost per iteration.
-                    for { let i := iterations } i { i := sub(i, 1) } {
-                        // The loop body is intentionally empty.
-                        // We are stressing the JUMPI and JUMPDEST validation,
-                        // not any operations within the loop.
-                    }
-                }
+            // This is the most gas-efficient loop structure. The for loop's
+            // condition check and decrement will compile to opcodes that
+            // end in a JUMPI back to the start of the loop. The body is
+            // empty, adding no extra gas cost per iteration.
+            for { let i := iterations } i { i := sub(i, 1) } {
+                // Intentionally empty loop body.
+            }
+        }
+        (uint256 gasUsed, ) = _finishAttack(ctx);
+        emit OpcodeResult("JUMPDEST", gasUsed);
     }
 
     // MCOPY attack - Second most expensive opcode (666.39 cycles/gas)
@@ -83,9 +155,10 @@ contract ZKarnage {
      * @param size The size of the memory chunk to copy in each iteration (in bytes).
      * @param iterations The number of copy operations to perform.
      */
-    function executeMcopyAttack(uint256 size, uint256 iterations) external pure {
-        // Allocate memory buffer - expansion cost paid once
+    function executeMcopyAttack(uint256 size, uint256 iterations) external {
+        AttackContext memory ctx = _beginAttack(AttackId.Mcopy, iterations, bytes32(size));
         bytes memory data = new bytes(size);
+        uint256 accumulator;
 
         assembly {
             // Countdown loop for minimal gas overhead (matching executeJumpdestAttack pattern)
@@ -95,26 +168,38 @@ contract ZKarnage {
                 // while still stressing the memory subsystem for ZK proving
                 let value := mload(add(data, 64))
                 mstore(add(data, 32), value)
+                accumulator := xor(accumulator, value)
                 value := mload(add(data, 96))
                 mstore(add(data, 64), value)
+                accumulator := xor(accumulator, value)
                 value := mload(add(data, 128))
                 mstore(add(data, 96), value)
+                accumulator := xor(accumulator, value)
             }
         }
+
+        ctx.carry = bytes32(accumulator);
+        (uint256 gasUsed, ) = _finishAttack(ctx);
+        emit OpcodeResult("MCOPY", gasUsed);
     }
 
     // CALLDATACOPY attack - Third most expensive opcode (580.81 cycles/gas)
     function executeCalldatacopyAttack(uint256 size, uint256 iterations) external {
-        uint256 gasStart = gasleft();
+        AttackContext memory ctx = _beginAttack(AttackId.Calldatacopy, iterations, bytes32(size));
         bytes memory output = new bytes(size);
+        bytes32 headWord;
         
         assembly {
+            let outPtr := add(output, 32)
             for { let i := 0 } lt(i, iterations) { i := add(i, 1) } {
-                calldatacopy(add(output, 32), 0, size)
+                calldatacopy(outPtr, 0, size)
             }
+            headWord := mload(outPtr)
         }
-        
-        emit OpcodeResult("CALLDATACOPY", gasStart - gasleft());
+
+        ctx.carry = headWord;
+        (uint256 gasUsed, ) = _finishAttack(ctx);
+        emit OpcodeResult("CALLDATACOPY", gasUsed);
     }
 
     /**
@@ -127,7 +212,10 @@ contract ZKarnage {
      *
      * @param iterations The number of MODEXP operations to perform.
      */
-    function executeModExpAttack(uint256 iterations) external view {
+    function executeModExpAttack(uint256 iterations) external {
+        AttackContext memory ctx = _beginAttack(AttackId.Modexp, iterations, bytes32(iterations));
+        uint256 accumulator;
+
         // Using an unchecked block saves ~100 gas per iteration by removing overflow checks
         unchecked {
             for (uint256 i = 0; i < iterations; i++) {
@@ -157,20 +245,31 @@ contract ZKarnage {
 
                     // Call MODEXP precompile using staticcall (correct for non-state-modifying precompiles)
                     // Input: 3*32 (lengths) + 32 (base) + 64 (exponent) + 32 (modulus) = 224 bytes (0xE0)
-                    // We reuse memory location p for output to save gas on memory allocation
-                    // pop() discards the success value to save gas (we don't check for success
-                    // because the goal is purely to force the ZK prover to verify the computation)
-                    pop(staticcall(
+                    let success := staticcall(
                         gas(),      // Forward all available gas
                         0x05,       // Address of MODEXP precompile
                         p,          // Input memory offset
                         0xE0,       // Input size (224 bytes)
                         p,          // Output memory offset (reuse input location)
                         0x20        // Output size (32 bytes)
-                    ))
+                    )
+
+                    // Fold the result into accumulator to produce deterministic digest
+                    switch success
+                    case 0 {
+                        // If the precompile ever fails we capture that in the accumulator
+                        accumulator := xor(accumulator, 0xDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF)
+                    }
+                    default {
+                        accumulator := xor(accumulator, mload(p))
+                    }
                 }
             }
         }
+
+        ctx.carry = bytes32(accumulator);
+        (uint256 gasUsed, ) = _finishAttack(ctx);
+        emit ModExpResult(gasUsed, accumulator);
     }
 
     /**
@@ -185,7 +284,10 @@ contract ZKarnage {
      *
      * @param iterations The number of pairing operations to perform.
      */
-    function executeBnPairingAttack(uint256 iterations) external view {
+    function executeBnPairingAttack(uint256 iterations) external {
+        AttackContext memory ctx = _beginAttack(AttackId.BnPairing, iterations, bytes32(iterations));
+        uint256 accumulator;
+
         assembly {
             // Get free memory pointer for our input buffer
             let p := mload(0x40)
@@ -224,24 +326,32 @@ contract ZKarnage {
                 // Call BN_PAIRING precompile (address 0x08)
                 // Input: 384 bytes (2 pairs)
                 // Output: 32 bytes (1 if valid pairing, 0 otherwise)
-                pop(staticcall(
+                let success := staticcall(
                     gas(),         // Forward all available gas
                     0x08,          // BN_PAIRING precompile address
                     p,             // Input memory offset
                     0x180,         // Input size: 384 bytes (0x180 in hex)
                     add(p, 0x180), // Output memory offset (after input, not overlapping)
                     0x20           // Output size: 32 bytes
-                ))
+                )
+                switch success
+                case 0 {
+                    accumulator := xor(accumulator, 0xCAFEBABECAFEBABECAFEBABECAFEBABECAFEBABECAFEBABECAFEBABECAFEBABE)
+                }
+                default {
+                    accumulator := xor(accumulator, mload(add(p, 0x180)))
+                }
             }
         }
+
+        ctx.carry = bytes32(accumulator);
+        (uint256 gasUsed, ) = _finishAttack(ctx);
+        emit PrecompileResult("BN_PAIRING", gasUsed);
     }
 
     // BN_MUL attack - (17.48 cycles/gas)
     function executeBnMulAttack(uint256 iterations) external {
         // Input for point multiplication (96 bytes: point x, y, scalar)
-        bytes memory input = new bytes(96);
-
-        // Use valid BN254 G1 generator point (x, y)
         bytes32 g1_x = bytes32(uint256(1));
         bytes32 g1_y = bytes32(uint256(2));
 
@@ -249,25 +359,34 @@ contract ZKarnage {
         // This forces many point doubling operations in the scalar multiplication
         bytes32 scalar = bytes32(uint256(0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000000));
 
+        AttackContext memory ctx = _beginAttack(AttackId.BnMul, iterations, scalar);
+        bytes memory input = new bytes(96);
+        bytes memory output = new bytes(64);
+        uint256 accumulator;
+
         assembly {
             mstore(add(input, 32), g1_x)
             mstore(add(input, 64), g1_y)
             mstore(add(input, 96), scalar)
         }
 
-        uint256 gasStart = gasleft();
         bool success;
 
         for(uint i = 0; i < iterations; i++) {
             // Use a large gas stipend
             assembly {
                 // BN_MUL output is 64 bytes
-                success := call(500000, BN_MUL_PRECOMPILE, 0, add(input, 32), 96, 0, 64)
+                success := call(500000, BN_MUL_PRECOMPILE, 0, add(input, 32), 96, add(output, 32), 64)
             }
             require(success, "BN_MUL call failed");
+            assembly {
+                accumulator := xor(accumulator, mload(add(output, 32)))
+                accumulator := xor(accumulator, mload(add(output, 64)))
+            }
         }
 
-        uint256 gasUsed = gasStart - gasleft();
+        ctx.carry = bytes32(accumulator);
+        (uint256 gasUsed, ) = _finishAttack(ctx);
         emit PrecompileResult("BN_MUL", gasUsed);
     }
 
@@ -288,9 +407,10 @@ contract ZKarnage {
         // Pre-allocate memory for input to avoid allocation inside loop
         bytes memory input = new bytes(128);
 
-        uint256 gasStart = gasleft();
+        AttackContext memory ctx = _beginAttack(AttackId.Ecrecover, iterations, hash);
         bool success;
         address recoveredAddr; // To store result, preventing removal by optimizer
+        uint256 accumulator;
 
         for(uint i = 0; i < iterations; i++) {
              // Vary the hash each iteration to ensure different work is done
@@ -309,11 +429,13 @@ contract ZKarnage {
                  recoveredAddr := mload(0) // Load result into memory
              }
              // Don't require success - invalid signatures still do computation work
+            accumulator ^= uint256(uint160(recoveredAddr));
         }
         // Use recoveredAddr to prevent optimization
         if (recoveredAddr == address(0)) { }
 
-        uint256 gasUsed = gasStart - gasleft();
+        ctx.carry = bytes32(accumulator);
+        (uint256 gasUsed, ) = _finishAttack(ctx);
         emit PrecompileResult("ECRECOVER", gasUsed);
     }
 
@@ -322,7 +444,7 @@ contract ZKarnage {
         require(dataSize >= 32, "Data size must be at least 32 bytes");
         require(dataSize <= 4096, "Data size must not exceed 4096 bytes");
         
-        uint256 gasStart = gasleft();
+        AttackContext memory ctx = _beginAttack(AttackId.Keccak, iterations, accumulatedHash);
         
         // Pure Yul implementation to defeat optimizer
         assembly {
@@ -401,7 +523,8 @@ contract ZKarnage {
             log1(0, 0, runningHash)
         }
         
-        uint256 gasUsed = gasStart - gasleft();
+        ctx.carry = accumulatedHash;
+        (uint256 gasUsed, ) = _finishAttack(ctx);
         emit OpcodeResult("KECCAK256", gasUsed);
     }
 
@@ -410,7 +533,7 @@ contract ZKarnage {
         require(dataSize >= 32, "Data size must be at least 32 bytes");
         require(dataSize <= 4096, "Data size must not exceed 4096 bytes");
         
-        uint256 gasStart = gasleft();
+        AttackContext memory ctx = _beginAttack(AttackId.Sha256, iterations, accumulatedSha256Hash);
         
         // Pure Yul implementation to defeat optimizer
         assembly {
@@ -515,7 +638,8 @@ contract ZKarnage {
             log1(0, 0, runningHash)
         }
         
-        uint256 gasUsed = gasStart - gasleft();
+        ctx.carry = accumulatedSha256Hash;
+        (uint256 gasUsed, ) = _finishAttack(ctx);
         emit PrecompileResult("SHA256", gasUsed);
     }
 }

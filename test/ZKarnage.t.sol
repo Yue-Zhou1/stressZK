@@ -33,7 +33,7 @@ contract ZKarnageTest is Test {
     // event ContractAccessed(address indexed target, uint256 size);
 
     // Deployed contract address on Taiko Hoodi testnet
-    address constant DEPLOYED_CONTRACT = 0x586498e8cE0f8fF21DF9B8d15E1d0E9362AAF2eD;
+    address constant DEPLOYED_CONTRACT = 0xFd73aFC0fA12667f037fd4F000e993982dbCD8F4;
 
     // Taiko Hoodi testnet configuration
     string constant TAIKO_HOODI_RPC = "https://rpc.hoodi.taiko.xyz";
