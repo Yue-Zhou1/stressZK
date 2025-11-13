@@ -33,26 +33,27 @@ contract ZKarnageTest is Test {
     // event ContractAccessed(address indexed target, uint256 size);
 
     // Deployed contract address on Taiko Hoodi testnet
-    address constant DEPLOYED_CONTRACT = 0xFd73aFC0fA12667f037fd4F000e993982dbCD8F4;
+    address constant DEPLOYED_CONTRACT = 0xfbfbfDdd6e35dA57b7B0F9a2C10E34Be70B3A4E9;
 
     // Taiko Hoodi testnet configuration
-    string constant TAIKO_HOODI_RPC = "https://rpc.hoodi.taiko.xyz";
-    uint256 constant TAIKO_HOODI_CHAIN_ID = 167013;
+    string constant TAIKO_HOODI_RPC = "https://rpc.internal.taiko.xyz";
+    uint256 constant TAIKO_HOODI_CHAIN_ID = 167001;
 
     // Test addresses (will use deployed contract address as test target)
     address[] testAddresses;
     
     // Gas limits for different attacks (Adjust as needed based on runs)
-    uint256 constant JUMPDEST_GAS_LIMIT = 1_000_000;
-    uint256 constant MCOPY_GAS_LIMIT = 1_000_000;
-    uint256 constant CALLDATACOPY_GAS_LIMIT = 1_000_000;
-    uint256 constant MODEXP_GAS_LIMIT = 1_000_000;
-    uint256 constant BN_PAIRING_GAS_LIMIT = 5_000_000;
-    uint256 constant BN_MUL_GAS_LIMIT = 5_500_000;
-    uint256 constant ECRECOVER_GAS_LIMIT = 500_000;
-    uint256 constant EXTCODESIZE_GAS_LIMIT = 100_000;
-    uint256 constant KECCAK_GAS_LIMIT = 2_000_000;
-    uint256 constant SHA256_GAS_LIMIT = 2_000_000;
+    uint256 constant JUMPDEST_GAS_LIMIT = 15_000_000;
+    uint256 constant MCOPY_GAS_LIMIT = 15_000_000;
+    uint256 constant CALLDATACOPY_GAS_LIMIT = 15_000_000;
+    uint256 constant MODEXP_GAS_LIMIT = 15_000_000;
+    uint256 constant BN_PAIRING_GAS_LIMIT = 15_000_000;
+    uint256 constant BN_ADD_GAS_LIMIT = 15_000_000;
+    uint256 constant BN_MUL_GAS_LIMIT = 15_000_000;
+    uint256 constant ECRECOVER_GAS_LIMIT = 15_000_000;
+    uint256 constant EXTCODESIZE_GAS_LIMIT = 15_000_000;
+    uint256 constant KECCAK_GAS_LIMIT = 15_000_000;
+    uint256 constant SHA256_GAS_LIMIT = 15_000_000;
     
     function setUp() public {
         console.log("\n=== Taiko Hoodi Testnet Fork Setup ===");
@@ -90,7 +91,7 @@ contract ZKarnageTest is Test {
 
     function testJumpdestAttack() public {
         console.log("\n=== Testing JUMPDEST Attack ===");
-        uint256 iterations = 6200;
+        uint256 iterations = 200_000;
 
         uint256 gasStart = gasleft();
         // Use low-level call to avoid staticcall optimization
@@ -110,7 +111,7 @@ contract ZKarnageTest is Test {
     function testMcopyAttack() public {
         console.log("\n=== Testing Memory Operations (MCOPY) Attack ===");
         uint256 size = 4096;
-        uint256 iterations = 2500;
+        uint256 iterations = 82700;
 
         uint256 gasStart = gasleft();
         // Use low-level call to avoid optimization and ensure proper gas measurement
@@ -150,7 +151,7 @@ contract ZKarnageTest is Test {
 
     function testModExpAttack() public {
         console.log("\n=== Testing MODEXP Attack ===");
-        uint256 iterations = 330;
+        uint256 iterations = 3000;
 
         uint256 gasStart = gasleft();
         // Use low-level call to avoid staticcall optimization
@@ -185,9 +186,28 @@ contract ZKarnageTest is Test {
         assertLt(gasUsed, BN_PAIRING_GAS_LIMIT, "Gas usage too high for BN_PAIRING attack");
     }
 
+    function testBnAddAttack() public {
+        console.log("\n=== Testing BN_ADD Attack ===");
+        uint256 iterations = 32500;
+
+        ZKarnage local = new ZKarnage();
+
+        uint256 gasStart = gasleft();
+        vm.expectEmit(false, false, false, false, address(local));
+        emit PrecompileResult("BN_ADD", 0);
+        local.executeBnAddAttack(iterations);
+        uint256 gasUsed = gasStart - gasleft();
+
+        console.log("Total Gas used for BN_ADD attack tx:", gasUsed);
+        if (iterations > 0) {
+            console.log("Approx Gas per iteration (external):", gasUsed / iterations);
+        }
+        assertLt(gasUsed, BN_ADD_GAS_LIMIT, "Gas usage too high for BN_ADD attack");
+    }
+
     function testBnMulAttack() public {
         console.log("\n=== Testing BN_MUL Attack ===");
-        uint256 iterations = 8;
+        uint256 iterations = 2380;
         
         uint256 gasStart = gasleft();
         // Expect PrecompileResult event (only check emitter)

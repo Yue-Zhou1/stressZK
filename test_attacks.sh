@@ -34,8 +34,8 @@ if [ -f ".env.taiko_hoodi" ]; then
 fi
 
 # Network configuration
-TAIKO_HOODI_RPC="https://rpc.hoodi.taiko.xyz"
-TAIKO_HOODI_CHAIN_ID=167013
+TAIKO_HOODI_RPC="https://rpc.internal.taiko.xyz"
+TAIKO_HOODI_CHAIN_ID=167001
 
 # Check private key
 if [ -z "$PRIVATE_KEY" ]; then
@@ -130,28 +130,33 @@ ATTACK_EXPECTED_RATIO[4]="37.91"
 ATTACK_DESCRIPTION[4]="BN254 Pairing precompile - Most expensive precompile"
 ATTACK_PARAMS[4]="iterations:uint256"
 
-ATTACK_NAMES[5]="executeBnMulAttack"
-ATTACK_EXPECTED_RATIO[5]="17.48"
-ATTACK_DESCRIPTION[5]="BN254 Multiplication precompile"
+ATTACK_NAMES[5]="executeBnAddAttack"
+ATTACK_EXPECTED_RATIO[5]="20.00"
+ATTACK_DESCRIPTION[5]="BN254 Point addition precompile"
 ATTACK_PARAMS[5]="iterations:uint256"
 
-ATTACK_NAMES[6]="executeEcrecoverAttack"
-ATTACK_EXPECTED_RATIO[6]="15.74"
-ATTACK_DESCRIPTION[6]="ECRECOVER signature recovery precompile"
+ATTACK_NAMES[6]="executeBnMulAttack"
+ATTACK_EXPECTED_RATIO[6]="17.48"
+ATTACK_DESCRIPTION[6]="BN254 Multiplication precompile"
 ATTACK_PARAMS[6]="iterations:uint256"
 
-ATTACK_NAMES[7]="executeModExpAttack"
-ATTACK_EXPECTED_RATIO[7]="Variable"
-ATTACK_DESCRIPTION[7]="Modular exponentiation precompile"
+ATTACK_NAMES[7]="executeEcrecoverAttack"
+ATTACK_EXPECTED_RATIO[7]="15.74"
+ATTACK_DESCRIPTION[7]="ECRECOVER signature recovery precompile"
 ATTACK_PARAMS[7]="iterations:uint256"
 
-ATTACK_NAMES[8]="executeAttack"
-ATTACK_EXPECTED_RATIO[8]="Baseline"
-ATTACK_DESCRIPTION[8]="Original EXTCODESIZE attack - Baseline"
-ATTACK_PARAMS[8]="targets:address[]"
+ATTACK_NAMES[8]="executeModExpAttack"
+ATTACK_EXPECTED_RATIO[8]="Variable"
+ATTACK_DESCRIPTION[8]="Modular exponentiation precompile"
+ATTACK_PARAMS[8]="iterations:uint256"
+
+ATTACK_NAMES[9]="executeAttack"
+ATTACK_EXPECTED_RATIO[9]="Baseline"
+ATTACK_DESCRIPTION[9]="Original EXTCODESIZE attack - Baseline"
+ATTACK_PARAMS[9]="targets:address[]"
 
 # Total number of attacks
-TOTAL_ATTACKS=8
+TOTAL_ATTACKS=9
 
 # Function to execute and record an attack
 execute_attack() {
@@ -213,6 +218,7 @@ execute_attack() {
     TX_OUTPUT=$(cast send $CONTRACT_ADDRESS "${function_sig}" $param_values \
         --rpc-url $TAIKO_HOODI_RPC \
         --private-key $PRIVATE_KEY \
+        --timeout 360 \
         --legacy \
         2>&1)
     CAST_EXIT_CODE=$?
@@ -365,10 +371,10 @@ echo "Progress is saved after each attack"
 echo ""
 
 # Ask if user wants to start from a specific attack
-read -p "Start from attack number (1-8, or press Enter for 1): " START_NUM
+read -p "Start from attack number (1-9, or press Enter for 1): " START_NUM
 START_NUM=${START_NUM:-1}
 
-if ! [[ "$START_NUM" =~ ^[1-8]$ ]]; then
+if ! [[ "$START_NUM" =~ ^[1-9]$ ]]; then
     echo -e "${RED}Invalid attack number. Starting from 1.${NC}"
     START_NUM=1
 fi
@@ -379,7 +385,7 @@ if [ "$START_NUM" -gt 1 ]; then
 fi
 
 # Execute all attacks
-for i in $(seq $START_NUM 8); do
+for i in $(seq $START_NUM $TOTAL_ATTACKS); do
     execute_attack $i
 done
 

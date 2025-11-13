@@ -2,6 +2,7 @@
 pragma solidity ^0.8.19;
 
 contract ZKarnage {
+    error BnAddFailure(uint256 iteration);
     event ContractAccessed(address indexed target, uint256 size);
     event AttackSummary(uint256 numContracts, uint256 totalSize);
     event ModExpResult(uint256 gasUsed, uint256 result);
@@ -36,6 +37,7 @@ contract ZKarnage {
         Calldatacopy,
         Modexp,
         BnPairing,
+        BnAdd,
         BnMul,
         Ecrecover,
         Keccak,
@@ -347,6 +349,47 @@ contract ZKarnage {
         ctx.carry = bytes32(accumulator);
         (uint256 gasUsed, ) = _finishAttack(ctx);
         emit PrecompileResult("BN_PAIRING", gasUsed);
+    }
+
+    // BN_ADD attack - stresses elliptic curve additions with minimal gas overhead
+    function executeBnAddAttack(uint256 iterations) external {
+        AttackContext memory ctx = _beginAttack(AttackId.BnAdd, iterations, bytes32(iterations));
+        bytes memory input = new bytes(128);
+        bytes memory output = new bytes(64);
+        uint256 accumulator;
+
+        bytes32 g1_x = bytes32(uint256(1));
+        bytes32 g1_y = bytes32(uint256(2));
+        bytes32 g2_x = bytes32(uint256(0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd3));
+        bytes32 g2_y = bytes32(uint256(0x015ed738c0e0a7c92e7845f96b2ae9c0a68a6a449e3538fc7ff3ebf7a5a18a2c4));
+
+        assembly {
+            mstore(add(input, 32), g1_x)
+            mstore(add(input, 64), g1_y)
+            mstore(add(input, 96), g2_x)
+            mstore(add(input, 128), g2_y)
+        }
+
+        bool success;
+
+        for (uint256 i = 0; i < iterations; i++) {
+            assembly {
+                success := call(200000, BN_ADD_PRECOMPILE, 0, add(input, 32), 128, add(output, 32), 64)
+            }
+            if (!success) revert BnAddFailure(i);
+
+            assembly {
+                accumulator := xor(accumulator, mload(add(output, 32)))
+                accumulator := xor(accumulator, mload(add(output, 64)))
+
+                mstore(add(input, 32), mload(add(output, 32)))
+                mstore(add(input, 64), mload(add(output, 64)))
+            }
+        }
+
+        ctx.carry = bytes32(accumulator);
+        (uint256 gasUsed, ) = _finishAttack(ctx);
+        emit PrecompileResult("BN_ADD", gasUsed);
     }
 
     // BN_MUL attack - (17.48 cycles/gas)
