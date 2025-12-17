@@ -41,7 +41,11 @@ contract ZKarnage {
         BnMul,
         Ecrecover,
         Keccak,
-        Sha256
+        Sha256,
+        Identity,
+        Mstore,
+        Add,
+        Push
     }
 
     struct AttackContext {
@@ -202,6 +206,57 @@ contract ZKarnage {
         ctx.carry = headWord;
         (uint256 gasUsed, ) = _finishAttack(ctx);
         emit OpcodeResult("CALLDATACOPY", gasUsed);
+    }
+
+    // MSTORE attack - Minimal memory write/read per iteration
+    function executeMstoreAttack(uint256 iterations) external {
+        AttackContext memory ctx = _beginAttack(AttackId.Mstore, iterations, bytes32(iterations));
+        uint256 accumulator;
+
+        assembly {
+            let p := mload(0x40)
+            for { let i := iterations } i { i := sub(i, 1) } {
+                mstore(p, i)
+                accumulator := xor(accumulator, mload(p))
+            }
+        }
+
+        ctx.carry = bytes32(accumulator);
+        (uint256 gasUsed, ) = _finishAttack(ctx);
+        emit OpcodeResult("MSTORE", gasUsed);
+    }
+
+    // ADD attack - Minimal arithmetic per iteration
+    function executeAddAttack(uint256 iterations) external {
+        AttackContext memory ctx = _beginAttack(AttackId.Add, iterations, bytes32(iterations));
+        uint256 accumulator;
+
+        assembly {
+            for { let i := iterations } i { i := sub(i, 1) } {
+                accumulator := add(accumulator, 1)
+            }
+        }
+
+        ctx.carry = bytes32(accumulator);
+        (uint256 gasUsed, ) = _finishAttack(ctx);
+        emit OpcodeResult("ADD", gasUsed);
+    }
+
+    // PUSH attack - Executes a PUSH32 (constant) per iteration
+    function executePushAttack(uint256 iterations) external {
+        AttackContext memory ctx = _beginAttack(AttackId.Push, iterations, bytes32(iterations));
+        uint256 accumulator;
+
+        assembly {
+            for { let i := iterations } i { i := sub(i, 1) } {
+                // XOR with a constant to force a PUSH opcode and keep a live value.
+                accumulator := xor(accumulator, 0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20)
+            }
+        }
+
+        ctx.carry = bytes32(accumulator);
+        (uint256 gasUsed, ) = _finishAttack(ctx);
+        emit OpcodeResult("PUSH", gasUsed);
     }
 
     /**
@@ -480,6 +535,37 @@ contract ZKarnage {
         ctx.carry = bytes32(accumulator);
         (uint256 gasUsed, ) = _finishAttack(ctx);
         emit PrecompileResult("ECRECOVER", gasUsed);
+    }
+
+    // IDENTITY precompile attack - Minimal copy work per iteration (0x04)
+    function executeIdentityAttack(uint256 iterations) external {
+        AttackContext memory ctx = _beginAttack(AttackId.Identity, iterations, bytes32(iterations));
+        uint256 accumulator;
+
+        assembly {
+            let p := mload(0x40)
+            let inPtr := p
+            let outPtr := add(p, 0x20)
+
+            // Bump free memory pointer (64 bytes).
+            mstore(0x40, add(p, 0x40))
+
+            for { let i := iterations } i { i := sub(i, 1) } {
+                // Vary input slightly to avoid identical calls.
+                mstore(inPtr, xor(i, accumulator))
+
+                let success := staticcall(gas(), 0x04, inPtr, 0x20, outPtr, 0x20)
+                if iszero(success) {
+                    revert(0, 0)
+                }
+
+                accumulator := xor(accumulator, mload(outPtr))
+            }
+        }
+
+        ctx.carry = bytes32(accumulator);
+        (uint256 gasUsed, ) = _finishAttack(ctx);
+        emit PrecompileResult("IDENTITY", gasUsed);
     }
 
     // KECCAK256 attack

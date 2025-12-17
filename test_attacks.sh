@@ -43,6 +43,16 @@ if [ -z "$PRIVATE_KEY" ]; then
     exit 1
 fi
 
+# EIP-1559 fee configuration (override via .env.taiko_hoodi)
+# Examples:
+#   MAX_FEE_PER_GAS=0.05gwei
+#   MAX_PRIORITY_FEE_PER_GAS=0.002gwei
+MAX_FEE_PER_GAS=${MAX_FEE_PER_GAS:-0.05gwei}
+MAX_PRIORITY_FEE_PER_GAS=${MAX_PRIORITY_FEE_PER_GAS:-0.002gwei}
+
+CAST_FEE_ARGS=(--gas-price "$MAX_FEE_PER_GAS" --priority-gas-price "$MAX_PRIORITY_FEE_PER_GAS")
+FORGE_FEE_ARGS=(--with-gas-price "$MAX_FEE_PER_GAS" --priority-gas-price "$MAX_PRIORITY_FEE_PER_GAS")
+
 # Create results file with timestamp
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 NOTES_FILE="research_notes_${TIMESTAMP}.txt"
@@ -71,7 +81,7 @@ else
     DEPLOY_OUTPUT=$(forge script script/DeployZKarnage.s.sol \
         --rpc-url $TAIKO_HOODI_RPC \
         --broadcast \
-        --legacy \
+        "${FORGE_FEE_ARGS[@]}" \
         2>&1)
     DEPLOY_EXIT_CODE=$?
     set -e
@@ -155,8 +165,88 @@ ATTACK_EXPECTED_RATIO[9]="Baseline"
 ATTACK_DESCRIPTION[9]="Original EXTCODESIZE attack - Baseline"
 ATTACK_PARAMS[9]="targets:address[]"
 
+# Additional minimal-gas opcode/precompile attacks
+ATTACK_NAMES[10]="executeIdentityAttack"
+ATTACK_EXPECTED_RATIO[10]="TBD"
+ATTACK_DESCRIPTION[10]="IDENTITY precompile (0x04) - minimal copy per iteration"
+ATTACK_PARAMS[10]="iterations:uint256"
+
+ATTACK_NAMES[11]="executeMstoreAttack"
+ATTACK_EXPECTED_RATIO[11]="TBD"
+ATTACK_DESCRIPTION[11]="MSTORE opcode - minimal memory write/read per iteration"
+ATTACK_PARAMS[11]="iterations:uint256"
+
+ATTACK_NAMES[12]="executeAddAttack"
+ATTACK_EXPECTED_RATIO[12]="TBD"
+ATTACK_DESCRIPTION[12]="ADD opcode - minimal arithmetic per iteration"
+ATTACK_PARAMS[12]="iterations:uint256"
+
+ATTACK_NAMES[13]="executePushAttack"
+ATTACK_EXPECTED_RATIO[13]="TBD"
+ATTACK_DESCRIPTION[13]="PUSH opcode - forces PUSH32 per iteration"
+ATTACK_PARAMS[13]="iterations:uint256"
+
 # Total number of attacks
-TOTAL_ATTACKS=9
+TOTAL_ATTACKS=13
+
+# Print a friendly list of available attacks
+print_attack_list() {
+    echo -e "${CYAN}Available attacks:${NC}"
+    for i in $(seq 1 "$TOTAL_ATTACKS"); do
+        printf "  %2d) %s\n" "$i" "${ATTACK_NAMES[$i]}"
+    done
+    echo ""
+}
+
+is_valid_attack_num() {
+    local num="$1"
+    [[ "$num" =~ ^[0-9]+$ ]] && [ "$num" -ge 1 ] && [ "$num" -le "$TOTAL_ATTACKS" ]
+}
+
+parse_attack_selection() {
+    # Accept: "all", "1", "1 2 3", "1,2,3", "1-4"
+    local input="$1"
+    local normalized
+    normalized="$(echo "$input" | tr ',' ' ' | xargs)"
+
+    if [[ -z "$normalized" ]]; then
+        return 1
+    fi
+
+    if [[ "$normalized" =~ ^[Aa][Ll][Ll]$ ]]; then
+        for i in $(seq 1 "$TOTAL_ATTACKS"); do
+            SELECTED_ATTACKS+=("$i")
+        done
+        return 0
+    fi
+
+    # Range like "3-7"
+    if [[ "$normalized" =~ ^([0-9]+)[[:space:]]*-[[:space:]]*([0-9]+)$ ]]; then
+        local start="${BASH_REMATCH[1]}"
+        local end="${BASH_REMATCH[2]}"
+        if ! is_valid_attack_num "$start" || ! is_valid_attack_num "$end"; then
+            return 1
+        fi
+        if [ "$start" -gt "$end" ]; then
+            local tmp="$start"
+            start="$end"
+            end="$tmp"
+        fi
+        for i in $(seq "$start" "$end"); do
+            SELECTED_ATTACKS+=("$i")
+        done
+        return 0
+    fi
+
+    # Space-separated list
+    for token in $normalized; do
+        if ! is_valid_attack_num "$token"; then
+            return 1
+        fi
+        SELECTED_ATTACKS+=("$token")
+    done
+    return 0
+}
 
 # Function to execute and record an attack
 execute_attack() {
@@ -219,7 +309,7 @@ execute_attack() {
         --rpc-url $TAIKO_HOODI_RPC \
         --private-key $PRIVATE_KEY \
         --timeout 360 \
-        --legacy \
+        "${CAST_FEE_ARGS[@]}" \
         2>&1)
     CAST_EXIT_CODE=$?
     set -e
@@ -245,7 +335,7 @@ execute_attack() {
 
     echo -e "${GREEN}✅ Transaction sent: ${TX_HASH}${NC}"
 
-    # Check if TX_OUTPUT already contains receipt data (cast send with --legacy shows receipt)
+    # Check if TX_OUTPUT already contains receipt data
     if echo "$TX_OUTPUT" | grep -q "blockNumber"; then
         echo "⏳ Parsing transaction receipt..."
         # Extract from the cast send output
@@ -353,12 +443,6 @@ execute_attack() {
         fi
     fi
     echo ""
-
-    # Ask if ready for next
-    if [ $num -lt $TOTAL_ATTACKS ]; then
-        echo -e "${CYAN}Press Enter when ready for the next attack...${NC}"
-        read
-    fi
 }
 
 # Main execution loop
@@ -370,23 +454,35 @@ echo "You can stop at any time with Ctrl+C"
 echo "Progress is saved after each attack"
 echo ""
 
-# Ask if user wants to start from a specific attack
-read -p "Start from attack number (1-9, or press Enter for 1): " START_NUM
-START_NUM=${START_NUM:-1}
+print_attack_list
+echo "Select attacks by number (examples: 2 5 10, 3-7, all)."
+echo "Press Enter for all, or type q to quit."
+echo ""
 
-if ! [[ "$START_NUM" =~ ^[1-9]$ ]]; then
-    echo -e "${RED}Invalid attack number. Starting from 1.${NC}"
-    START_NUM=1
-fi
+SELECTED_ATTACKS=()
+while true; do
+    read -p "Selection [all]: " SELECTION
+    SELECTION=${SELECTION:-all}
+    if [[ "$SELECTION" =~ ^[Qq]$ ]]; then
+        echo -e "${YELLOW}Exiting.${NC}"
+        exit 0
+    fi
 
-if [ "$START_NUM" -gt 1 ]; then
-    echo -e "${YELLOW}Starting from attack $START_NUM, skipping attacks 1-$((START_NUM-1))${NC}"
-    echo ""
-fi
+    SELECTED_ATTACKS=()
+    if parse_attack_selection "$SELECTION"; then
+        break
+    fi
+    echo -e "${RED}Invalid selection. Please try again.${NC}"
+done
 
-# Execute all attacks
-for i in $(seq $START_NUM $TOTAL_ATTACKS); do
-    execute_attack $i
+# Execute selected attacks
+for idx in "${!SELECTED_ATTACKS[@]}"; do
+    i="${SELECTED_ATTACKS[$idx]}"
+    execute_attack "$i"
+    if [ "$idx" -lt $((${#SELECTED_ATTACKS[@]} - 1)) ]; then
+        echo -e "${CYAN}Press Enter when ready for the next selected attack...${NC}"
+        read
+    fi
 done
 
 # Final summary
